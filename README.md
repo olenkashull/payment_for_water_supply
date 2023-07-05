@@ -1,2 +1,0 @@
-# payment_for_water_supply
-olenkashull/payment_for_water_supply

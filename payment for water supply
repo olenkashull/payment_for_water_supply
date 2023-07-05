@@ -1,0 +1,469 @@
+# payment_for_water_supply
+olenkashull/payment_for_water_supply
+<div class="container">
+  <mat-form-field class="household" appearance="fill">
+    <mat-label>Домогосподарство</mat-label>
+    <mat-select [(ngModel)]="chosenHousehold">
+      <mat-option *ngFor="let item of households" [value]="item">
+        {{ formatHousehold(item) }}
+      </mat-option>
+    </mat-select>
+  </mat-form-field>
+  <div class="inputs-wrapper">
+    <mat-form-field class="form-filed">
+      <mat-label class="form-label">Тариф (грн за 1 м³)</mat-label>
+      <input matInput type="text" [(ngModel)]="tariff" />
+    </mat-form-field>
+    <mat-form-field class="form-filed">
+      <mat-label class="form-label">Показання лічильника</mat-label>
+      <input matInput type="text" [(ngModel)]="rading" />
+    </mat-form-field>
+    <mat-form-field class="form-filed">
+      <mat-label class="form-label">Пільги (в %)</mat-label>
+      <input matInput type="text" [(ngModel)]="privilege" />
+    </mat-form-field>
+  </div>
+  <div class="wrapper">
+    <p *ngIf="price" class="price">Ціна квитанції: {{ price }} грн.</p>
+    <button
+      class="complete-btn"
+      [disabled]="!isValid"
+      mat-raised-button
+      color="primary"
+      (click)="createQuittance()"
+    >
+      Готово
+    </button>
+  </div>
+</div>
+
+import { Component, OnInit } from '@angular/core';
+import { map, filter } from 'rxjs/operators';
+import { ApiService } from '../api.service';
+import { Household } from '../domain-types';
+
+@Component({
+  selector: 'app-main',
+  templateUrl: './main.component.html',
+  styleUrls: ['./main.component.scss'],
+})
+export class MainComponent implements OnInit {
+  tariff: number | null = null;
+  rading: number | null = null;
+  privilege: number | null = null;
+  households: Household[] = [];
+  chosenHousehold: Household | null = null;
+
+  constructor(private apiService: ApiService) {}
+
+  get price() {
+    if (!(this.tariff && this.rading)) {
+      return '';
+    }
+    return +(
+      this.tariff *
+      this.rading *
+      (this.privilege ? 1 - this.privilege / 100 : 1)
+    ).toFixed(2);
+  }
+
+  get isValid() {
+    return !!(this.tariff && this.rading && this.chosenHousehold);
+  }
+
+  ngOnInit(): void {
+    this.apiService
+      .getHouseholds()
+      .pipe(map((response) => response.result))
+      .subscribe((households) => (this.households = households as Household[]));
+  }
+
+  formatHousehold(household: Household) {
+    return `вул. ${household.street}, ${household.apartment} квартира ${household.house}`;
+  }
+
+  createQuittance() {
+    if (!this.isValid) {
+      return;
+    }
+    this.apiService
+      .createQuittance({
+        tariff: this.tariff as number,
+        meter_rading: this.rading as number,
+        household: this.chosenHousehold!._id,
+        privilege: this.privilege ?? undefined,
+      })
+      .subscribe(() => {
+        this.tariff = null;
+        this.chosenHousehold = null;
+        this.rading = null;
+        this.privilege = null;
+      });
+  }
+}
+
+<div class="container">
+  <div class="quittances">
+    <p class="quittances-title">Відомості</p>
+    <div class="table-container" *ngIf="quittances.length">
+      <table
+        mat-table
+        [dataSource]="quittances"
+        class="mat-elevation-z8 quittances-table"
+      >
+        <ng-container matColumnDef="household">
+          <th mat-header-cell *matHeaderCellDef>Домогосподарство</th>
+          <td mat-cell *matCellDef="let element">
+            {{ formatHousehold(element.household) }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="tarrif">
+          <th mat-header-cell *matHeaderCellDef>Тариф (грн за 1 м³)</th>
+          <td mat-cell *matCellDef="let element">{{ element.tariff }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="rading">
+          <th mat-header-cell *matHeaderCellDef>Показники лічильника</th>
+          <td mat-cell *matCellDef="let element">{{ element.meter_rading }}</td>
+        </ng-container>
+
+        <ng-container matColumnDef="privilege">
+          <th mat-header-cell *matHeaderCellDef>Пільги (в %)</th>
+          <td mat-cell *matCellDef="let element">
+            {{ element.privilege || "немає" }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="price">
+          <th mat-header-cell *matHeaderCellDef>В сумі</th>
+          <td mat-cell *matCellDef="let element">
+            {{ getPrice(element) }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="date">
+          <th mat-header-cell *matHeaderCellDef>Дата</th>
+          <td mat-cell *matCellDef="let element">
+            {{ formatDate(element.created_at) }}
+          </td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns"></tr>
+      </table>
+      <mat-paginator
+        [length]="quittanceCount"
+        [pageSize]="limit"
+        [pageSizeOptions]="[5, 10, 25, 100]"
+        aria-label="Виберіть сторінку"
+        (page)="onChangePage($event)"
+      >
+      </mat-paginator>
+    </div>
+  </div>
+</div>
+
+
+import { Component, OnInit, ViewChild } from '@angular/core';
+import { map, filter, debounceTime, mergeMap, tap } from 'rxjs/operators';
+import { MatTable } from '@angular/material/table';
+import { ApiService } from '../api.service';
+import { PageEvent } from '@angular/material/paginator';
+import { Household, Payment } from '../domain-types';
+
+@Component({
+  selector: 'app-quittance',
+  templateUrl: './quittance.component.html',
+  styleUrls: ['./quittance.component.scss'],
+})
+export class QuittanceComponent implements OnInit {
+  quittances: Payment[] = [];
+  page: number = 0;
+  limit: number = 5;
+  quittanceCount: number = 100;
+  displayedColumns: string[] = [
+    'tarrif',
+    'rading',
+    'privilege',
+    'household',
+    'price',
+    'date',
+  ];
+  @ViewChild(MatTable, { static: false }) table!: MatTable<Payment>;
+  constructor(private apiService: ApiService) {}
+
+  ngOnInit(): void {
+    this.apiService
+      .getQuittanceCount()
+      .pipe(
+        filter((response) => !!response.result),
+        map((response) => response.result as number)
+      )
+      .subscribe((count) => (this.quittanceCount = count));
+    this.apiService
+      .getQuittances(this.page * this.limit, this.limit)
+      .pipe(
+        filter((response) => !!response.result),
+        map((response) => response.result as Payment[])
+      )
+      .subscribe((quittances) => (this.quittances = quittances));
+  }
+
+  getPrice(quittance: Payment) {
+    return +(
+      quittance.tariff *
+      quittance.meter_rading *
+      (quittance.privilege ? 1 - quittance.privilege / 100 : 1)
+    ).toFixed(2);
+  }
+
+  formatHousehold(household: Household) {
+    return `вул. ${household.street}, ${household.apartment} квартира ${household.house}`;
+  }
+
+  formatDate(dateStr: string) {
+    const date = new Date(dateStr);
+    return `${date.getDate() < 10 ? `0${date.getDate()}` : date.getDate()}.${
+      date.getMonth() + 1 < 10 ? `0${date.getMonth() + 1}` : date.getMonth() + 1
+    }.${date.getFullYear()} ${
+      date.getHours() < 10 ? `0${date.getHours()}` : date.getHours()
+    }:${date.getMinutes() < 10 ? `0${date.getMinutes()}` : date.getMinutes()}`;
+  }
+
+  onChangePage(event: PageEvent) {
+    this.apiService
+      .getQuittances(event.pageIndex * event.pageSize, event.pageSize)
+      .pipe(
+        filter((response) => !!response.result),
+        map((response) => response.result as Payment[])
+      )
+      .subscribe((quittances) => (this.quittances = quittances));
+  }
+}
+<div class="container">
+  <div class="households">
+    <p class="households-title">Домогосподарства</p>
+    <div class="table-container" *ngIf="households.length">
+      <table
+        mat-table
+        [dataSource]="households"
+        class="mat-elevation-z8 households-table"
+      >
+        <ng-container matColumnDef="street">
+          <th mat-header-cell *matHeaderCellDef>Вулиця</th>
+          <td mat-cell *matCellDef="let element">
+            {{ element.street }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="house">
+          <th mat-header-cell *matHeaderCellDef>Будинок</th>
+          <td mat-cell *matCellDef="let element">
+            {{ element.house }}
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="apartment">
+          <th mat-header-cell *matHeaderCellDef>Квартира</th>
+          <td mat-cell *matCellDef="let element">{{ element.apartment }}</td>
+        </ng-container>
+
+        <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: displayedColumns"></tr>
+      </table>
+      <mat-paginator
+        [length]="householdCount"
+        [pageSize]="limit"
+        [pageSizeOptions]="[5, 10, 25, 100]"
+        aria-label="Виберіть сторінку"
+        (page)="onChangePage($event)"
+      >
+      </mat-paginator>
+    </div>
+  </div>
+</div>
+import { Component, OnInit, ViewChild } from '@angular/core';
+import { map, filter } from 'rxjs/operators';
+import { MatTable } from '@angular/material/table';
+import { ApiService } from '../api.service';
+import { PageEvent } from '@angular/material/paginator';
+import { Household } from '../domain-types';
+
+@Component({
+  selector: 'app-household',
+  templateUrl: './household.component.html',
+  styleUrls: ['./household.component.scss'],
+})
+export class HouseholdComponent implements OnInit {
+  households: Household[] = [];
+  page: number = 0;
+  limit: number = 5;
+  householdCount: number = 100;
+  displayedColumns: string[] = ['street', 'house', 'apartment'];
+  @ViewChild(MatTable, { static: false }) table!: MatTable<Household>;
+  constructor(private apiService: ApiService) {}
+
+  ngOnInit(): void {
+    this.apiService
+      .getHouseholdCount()
+      .pipe(
+        filter((response) => !!response.result),
+        map((response) => response.result as number)
+      )
+      .subscribe((count) => (this.householdCount = count));
+    this.apiService
+      .getHouseholds(this.page * this.limit, this.limit)
+      .pipe(
+        filter((response) => !!response.result),
+        map((response) => response.result as Household[])
+      )
+      .subscribe((households) => (this.households = households));
+  }
+
+  onChangePage(event: PageEvent) {
+    this.apiService
+      .getHouseholds(event.pageIndex * event.pageSize, event.pageSize)
+      .pipe(
+        filter((response) => !!response.result),
+        map((response) => response.result as Household[])
+      )
+      .subscribe((households) => (this.households = households));
+  }
+}
+
+import { HttpClient } from '@angular/common/http';
+import { Injectable } from '@angular/core';
+import { Household, Payment, Quittance } from './domain-types';
+
+type ApiResponse<T> = {
+  result?: T;
+  error?: {
+    message: string;
+  };
+};
+
+@Injectable({
+  providedIn: 'root',
+})
+export class ApiService {
+  private url = 'http://127.0.0.1:3001/api';
+
+  constructor(private http: HttpClient) {}
+
+  private callApi<T>(method: string, params: object = {}) {
+    return this.http.post<ApiResponse<T>>(this.url, { method, params });
+  }
+
+  getQuittances(offset = 0, limit = 10) {
+    return this.callApi<Payment[]>('quittance.find', { offset, limit });
+  }
+
+  getHouseholds(offset?: number, limit?: number) {
+    return this.callApi<Household[]>('household.find', { offset, limit });
+  }
+
+  createQuittance(quittance: Quittance) {
+    return this.callApi<Quittance>('quittance.create', { quittance });
+  }
+
+  getQuittanceCount() {
+    return this.callApi<number>('quittance.count', {});
+  }
+
+  getHouseholdCount() {
+    return this.callApi<number>('household.count', {});
+  }
+}
+
+const QuittanceRepository = require('../repositories/quittance')
+const HouseholdRepository = require('../repositories/household')
+
+const quittanceRepository = new QuittanceRepository()
+const householdRepository = new HouseholdRepository()
+
+module.exports = {
+  'quittance.create': async ({ quittance }) => {
+    return quittanceRepository.create(quittance)
+  },
+
+  'quittance.find': async ({ offset, limit }) => {
+    const quittances = await quittanceRepository.find(offset, limit)
+    const households = await householdRepository.getByQuittanceIds(
+      quittances.map(({ household }) => household),
+    )
+
+    return {
+      result: quittances.map((el) => ({
+        ...el.toJSON(),
+        household: households
+          .find(({ _id }) => _id.toString() === el.household._id.toString())
+          .toJSON(),
+      })),
+    }
+  },
+
+  'quittance.count': async () => {
+    const result = await quittanceRepository.count()
+    return { result }
+  },
+}
+
+
+const HouseholdRepository = require('../repositories/household')
+
+const householdRepository = new HouseholdRepository()
+
+module.exports = {
+  'household.find': async ({ offset, limit }) => {
+    const result = await householdRepository.find(offset, limit)
+    return { result }
+  },
+
+  'household.count': async () => {
+    const result = await householdRepository.count()
+    return { result }
+  },
+}
+
+const QuittanceModel = require('../models/quittance')
+
+class QuittanceRepository {
+  find(offset, limit, project = {}) {
+    return QuittanceModel.find({}, project, { skip: offset, limit, sort: { created_at: -1 } })
+  }
+
+  create(quittance) {
+    return QuittanceModel.create({ ...quittance })
+  }
+
+  count() {
+    return QuittanceModel.countDocuments()
+  }
+}
+
+module.exports = QuittanceRepository
+
+
+const HouseholdModel = require('../models/household')
+
+class HouseholdRepository {
+  find(offset, limit, project = {}) {
+    return HouseholdModel.find({}, project, { skip: offset, limit, sort: { created_at: -1 } })
+  }
+
+  count() {
+    return HouseholdModel.countDocuments()
+  }
+
+  getByQuittanceIds(ids) {
+    return HouseholdModel.find({ _id: { $in: ids } })
+  }
+}
+
+module.exports = HouseholdRepository
+
+
+
+
+
